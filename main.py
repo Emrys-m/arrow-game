@@ -21,6 +21,7 @@ GRID_COLOR = (25, 30, 45)
 CELL_BG = (22, 26, 40)
 CELL_BORDER = (45, 55, 75)
 SHADOW_COLOR = (4, 5, 10)
+STAR_EMPTY = (60, 70, 90)
 
 # 霓虹色
 NEON_BLUE = (0, 200, 255)
@@ -30,6 +31,7 @@ NEON_GREEN = (80, 255, 120)
 NEON_YELLOW = (255, 210, 70)
 NEON_ORANGE = (255, 140, 0)
 NEON_CYAN = (100, 255, 230)
+GOLD = (255, 215, 0)
 
 TITLE_COLOR = (240, 245, 255)
 SUB_TITLE_COLOR = (110, 120, 150)
@@ -81,15 +83,15 @@ LEVELS = [
     ]
 ]
 
-# ---------- 画箭头函数（新：箭身 + 箭头） ----------
+# ---------- 画箭头函数（箭身 + 箭头） ----------
 def draw_arrow(surface, x, y, direction, color=NEON_BLUE, outline_color=WHITE, scale=1.0):
-    length = int(26 * scale)  # 箭总长（一半）
+    length = int(26 * scale)
     if length <= 3:
         return
 
-    shaft_w = max(3, int(7 * scale))       # 箭身粗细
-    head_w = max(6, int(22 * scale))       # 箭头宽度
-    head_len = max(8, int(18 * scale))     # 箭头长度
+    shaft_w = max(3, int(7 * scale))
+    head_w = max(6, int(22 * scale))
+    head_len = max(8, int(18 * scale))
 
     if direction == 'R':
         tail = (x - length, y)
@@ -118,14 +120,11 @@ def draw_arrow(surface, x, y, direction, color=NEON_BLUE, outline_color=WHITE, s
     else:
         return
 
-    # 1) 箭身（先画描边粗线，再画彩色细线）
     pygame.draw.line(surface, outline_color, tail, head_base, shaft_w + 2)
     pygame.draw.line(surface, color, tail, head_base, shaft_w)
-    # 尾部圆端点
     pygame.draw.circle(surface, outline_color, tail, (shaft_w + 2) // 2)
     pygame.draw.circle(surface, color, tail, shaft_w // 2)
 
-    # 2) 箭头（三角形填充 + 描边）
     pygame.draw.polygon(surface, outline_color, [tip, h1, h2])
     inner_scale = 0.72
     inner_tip = (tip[0] + (h1[0] - tip[0]) * (1 - inner_scale) * 0.5 + (h2[0] - tip[0]) * (1 - inner_scale) * 0.5,
@@ -253,7 +252,6 @@ class Game:
         pygame.display.set_caption("一箭又一箭")
         self.clock = pygame.time.Clock()
 
-        # 字体
         self.font = pygame.font.SysFont("simhei", 24)
         self.label_font = pygame.font.SysFont("simhei", 14)
         self.value_font = pygame.font.SysFont("simhei", 24)
@@ -271,6 +269,11 @@ class Game:
         self.elapsed_time = 0.0
         self.flying_arrows = []
         self.bumping_arrows = []
+
+        # 星级系统
+        self.last_stars = 0        # 上一局获得的星级
+        self.total_stars = 0       # 累计星级
+        self.result_time = 0       # 进入结算界面的时间（用于星星弹出动画）
 
         self.time = 0
         self.particles = [Particle() for _ in range(40)]
@@ -342,12 +345,24 @@ class Game:
                     if self.count_arrows() == 0:
                         self.state = "WIN"
                         self.score += 50
+                        # 星级评定
+                        if self.mistakes == 0:
+                            self.last_stars = 3
+                        elif self.mistakes == 1:
+                            self.last_stars = 2
+                        else:
+                            self.last_stars = 1
+                        self.total_stars += self.last_stars
+                        self.result_time = self.time
                 else:
                     self.mistakes += 1
                     dist = self.get_block_dist(row, col, direction)
                     if dist > 0: self.bumping_arrows.append(BumpingArrow(row, col, direction, dist))
                     self.score = max(0, self.score - 5)
-                    if self.mistakes >= MAX_MISTAKES: self.state = "LOSE"
+                    if self.mistakes >= MAX_MISTAKES:
+                        self.state = "LOSE"
+                        self.last_stars = 0
+                        self.result_time = self.time
 
     def update(self):
         self.time += 1
@@ -361,6 +376,23 @@ class Game:
         for arrow in self.bumping_arrows[:]:
             arrow.update()
             if arrow.finished: self.bumping_arrows.remove(arrow)
+
+    # ---------- 画星星函数 ----------
+    def draw_star(self, cx, cy, radius, color, filled):
+        if radius <= 0:
+            return
+        points = []
+        for i in range(10):
+            angle = math.radians(-90 + i * 36)
+            r = radius if i % 2 == 0 else radius * 0.4
+            x = cx + math.cos(angle) * r
+            y = cy + math.sin(angle) * r
+            points.append((x, y))
+        if filled:
+            pygame.draw.polygon(self.screen, color, points)
+            pygame.draw.polygon(self.screen, WHITE, points, max(1, int(radius / 12)))
+        else:
+            pygame.draw.polygon(self.screen, color, points, 2)
 
     def draw_start_screen(self):
         self.screen.fill(BG_COLOR)
@@ -379,6 +411,7 @@ class Game:
                 rect = pygame.Rect(MARGIN_X + c * CELL_SIZE, MARGIN_Y + r * CELL_SIZE, CELL_SIZE, CELL_SIZE)
                 pygame.draw.rect(self.screen, GRID_COLOR, rect, 1)
 
+        # 标题（呼吸）
         title_scale = 1.0 + 0.02 * math.sin(self.time * 0.05)
         title_text = "一箭又一箭"
         title_base = self.title_font.render(title_text, True, TITLE_COLOR)
@@ -395,6 +428,7 @@ class Game:
         sub_title = self.font.render("点击箭头，让它飞出棋盘", True, SUB_TITLE_COLOR)
         self.screen.blit(sub_title, (WIDTH // 2 - sub_title.get_width() // 2, HEIGHT // 4 + 40))
 
+        # 开始按钮
         mouse_pos = pygame.mouse.get_pos()
         hover = self.start_btn_rect.collidepoint(mouse_pos)
         btn_color = BTN_HOVER if hover else BTN_COLOR
@@ -405,11 +439,18 @@ class Game:
         self.screen.blit(btn_text, (self.start_btn_rect.centerx - btn_text.get_width() // 2,
                                      self.start_btn_rect.centery - btn_text.get_height() // 2))
 
+        # 累计星级显示
+        if self.total_stars > 0:
+            star_y = self.start_btn_rect.bottom + 18
+            label = self.font.render(f"累计星级: {self.total_stars}", True, GOLD)
+            self.screen.blit(label, (WIDTH // 2 - label.get_width() // 2, star_y))
+
+        # 操作说明
         help_lines = [
             "规则：点击箭头，若前方无阻挡则飞出并消失。",
             "若前方有阻挡，箭头会碰撞弹回，失误次数 +1。",
             "失误 3 次游戏失败，消除所有箭头则通关。",
-            "按 空格键 或 点击按钮开始游戏。"
+            "3星 = 0 失误通关，2星 = 1 失误，1星 = 2 失误。"
         ]
         for i, line in enumerate(help_lines):
             help_surf = self.font.render(line, True, HELP_TEXT)
@@ -434,12 +475,13 @@ class Game:
         overlay.fill((6, 8, 15, 200))
         self.screen.blit(overlay, (0, 0))
 
-        panel_w, panel_h = 460, 420
+        panel_w, panel_h = 460, 470
         panel_x = WIDTH // 2 - panel_w // 2
         panel_y = HEIGHT // 2 - panel_h // 2
 
         accent = NEON_GREEN if is_win else NEON_RED
 
+        # 外发光
         pulse = 1.0 + 0.08 * math.sin(self.time * 0.06)
         glow = pygame.Surface((panel_w + 80, panel_h + 80), pygame.SRCALPHA)
         for i in range(5, 0, -1):
@@ -449,6 +491,7 @@ class Game:
                              border_radius=20 + i * 2)
         self.screen.blit(glow, (panel_x - 40, panel_y - 40))
 
+        # 阴影
         shadow = pygame.Surface((panel_w + 20, panel_h + 20), pygame.SRCALPHA)
         pygame.draw.rect(shadow, (0, 0, 0, 160), (0, 0, panel_w + 20, panel_h + 20), border_radius=22)
         self.screen.blit(shadow, (panel_x - 10, panel_y - 10))
@@ -456,6 +499,7 @@ class Game:
         panel_rect = pygame.Rect(panel_x, panel_y, panel_w, panel_h)
         pygame.draw.rect(self.screen, (22, 28, 45), panel_rect, border_radius=18)
 
+        # 内网格
         inner_clip = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
         for i in range(0, panel_w, 24):
             pygame.draw.line(inner_clip, (40, 50, 75, 50), (i, 0), (i, panel_h))
@@ -463,6 +507,7 @@ class Game:
             pygame.draw.line(inner_clip, (40, 50, 75, 50), (0, j), (panel_w, j))
         self.screen.blit(inner_clip, (panel_x, panel_y))
 
+        # 顶部光晕
         top_glow = pygame.Surface((panel_w, 200), pygame.SRCALPHA)
         for i in range(200, 0, -10):
             alpha = max(0, int(30 * (i / 200) * pulse))
@@ -473,6 +518,7 @@ class Game:
         inner_rect = pygame.Rect(panel_x + 6, panel_y + 6, panel_w - 12, panel_h - 12)
         pygame.draw.rect(self.screen, accent, inner_rect, width=1, border_radius=14)
 
+        # 四角
         corner_len = 18
         corner_thickness = 3
         corners = [
@@ -490,8 +536,9 @@ class Game:
         pygame.draw.rect(self.screen, accent, (panel_x, panel_y, panel_w, 4),
                          border_top_left_radius=18, border_top_right_radius=18)
 
-        icon_cy = panel_y + 78
-        icon_r = 40
+        # 圆形图标
+        icon_cy = panel_y + 70
+        icon_r = 36
         ring_r = int(icon_r + 10 + 5 * pulse)
         for angle in range(0, 360, 30):
             rad = math.radians(angle + self.time * 0.8)
@@ -506,17 +553,19 @@ class Game:
         pygame.draw.circle(inner_glow, (*accent, 60), (icon_r, icon_r), icon_r - 6)
         self.screen.blit(inner_glow, (WIDTH // 2 - icon_r, icon_cy - icon_r))
         icon_char = "通" if is_win else "败"
-        icon_font = pygame.font.SysFont("simhei", 40)
+        icon_font = pygame.font.SysFont("simhei", 36)
         icon_font.set_bold(True)
         icon_surf = icon_font.render(icon_char, True, accent)
         self.screen.blit(icon_surf, (WIDTH // 2 - icon_surf.get_width() // 2,
                                       icon_cy - icon_surf.get_height() // 2))
 
+        # 标题
         title_text = "通 关" if is_win else "失 败"
         title = self.big_font.render(title_text, True, TITLE_COLOR)
-        self.screen.blit(title, (WIDTH // 2 - title.get_width() // 2, panel_y + 140))
+        self.screen.blit(title, (WIDTH // 2 - title.get_width() // 2, panel_y + 122))
 
-        line_y = panel_y + 210
+        # 分隔线
+        line_y = panel_y + 180
         line_w = 260
         line_x = WIDTH // 2 - line_w // 2
         line_surf = pygame.Surface((line_w, 2), pygame.SRCALPHA)
@@ -525,22 +574,55 @@ class Game:
             pygame.draw.line(line_surf, (*accent, alpha), (i, 0), (i, 2))
         self.screen.blit(line_surf, (line_x, line_y))
 
-        score_label = self.label_font.render("本 局 得 分", True, SUB_TITLE_COLOR)
-        self.screen.blit(score_label, (WIDTH // 2 - score_label.get_width() // 2, panel_y + 228))
+        # ---------- 星级展示 ----------
+        star_cy = panel_y + 225
+        star_radius = 22
+        star_spacing = 65
+        stars_earned = self.last_stars if is_win else 0
 
-        big_score_font = pygame.font.SysFont("simhei", 46)
+        for i in range(3):
+            cx = WIDTH // 2 + (i - 1) * star_spacing
+            # 空星始终可见
+            self.draw_star(cx, star_cy, star_radius, STAR_EMPTY, False)
+            # 已获得的星带弹出动画
+            if i < stars_earned:
+                progress = (self.time - self.result_time - i * 18) / 18.0
+                progress = max(0.0, min(1.0, progress))
+                if progress > 0:
+                    scale = 1 - (1 - progress) ** 2  # ease-out
+                    r = int(star_radius * scale)
+                    if r > 0:
+                        self.draw_star(cx, star_cy, r, GOLD, True)
+
+        # 星级文字
+        if is_win:
+            star_text = f"获得 {stars_earned} 星评价"
+            star_color = GOLD
+        else:
+            star_text = "未获得星级"
+            star_color = SUB_TITLE_COLOR
+        star_label = self.label_font.render(star_text, True, star_color)
+        self.screen.blit(star_label, (WIDTH // 2 - star_label.get_width() // 2, panel_y + 258))
+
+        # 得分
+        score_label = self.label_font.render("本 局 得 分", True, SUB_TITLE_COLOR)
+        self.screen.blit(score_label, (WIDTH // 2 - score_label.get_width() // 2, panel_y + 288))
+
+        big_score_font = pygame.font.SysFont("simhei", 40)
         big_score_font.set_bold(True)
         score_surf = big_score_font.render(str(self.score), True, NEON_YELLOW)
-        self.screen.blit(score_surf, (WIDTH // 2 - score_surf.get_width() // 2, panel_y + 248))
+        self.screen.blit(score_surf, (WIDTH // 2 - score_surf.get_width() // 2, panel_y + 305))
 
+        # 用时
         time_label = self.label_font.render("本 局 用 时", True, SUB_TITLE_COLOR)
-        self.screen.blit(time_label, (WIDTH // 2 - time_label.get_width() // 2, panel_y + 318))
+        self.screen.blit(time_label, (WIDTH // 2 - time_label.get_width() // 2, panel_y + 360))
 
-        big_time_font = pygame.font.SysFont("simhei", 32)
+        big_time_font = pygame.font.SysFont("simhei", 28)
         big_time_font.set_bold(True)
         time_surf = big_time_font.render(format_time(self.elapsed_time), True, NEON_CYAN)
-        self.screen.blit(time_surf, (WIDTH // 2 - time_surf.get_width() // 2, panel_y + 338))
+        self.screen.blit(time_surf, (WIDTH // 2 - time_surf.get_width() // 2, panel_y + 378))
 
+        # 底部提示
         hint_text = "点击屏幕，进入下一关" if is_win else "点击屏幕，重新挑战"
         hint_pulse = 0.5 + 0.5 * math.sin(self.time * 0.1)
         hint_color = (
@@ -549,7 +631,7 @@ class Game:
             int(180 + 75 * hint_pulse),
         )
         hint = self.font.render(hint_text, True, hint_color)
-        self.screen.blit(hint, (WIDTH // 2 - hint.get_width() // 2, panel_y + panel_h - 45))
+        self.screen.blit(hint, (WIDTH // 2 - hint.get_width() // 2, panel_y + panel_h - 35))
 
     def draw_game_screen(self):
         self.screen.fill(BG_COLOR)
@@ -562,6 +644,7 @@ class Game:
         for p in self.particles:
             p.draw(self.screen)
 
+        # 棋盘
         for r in range(ROWS):
             for c in range(COLS):
                 x = MARGIN_X + c * CELL_SIZE
@@ -570,6 +653,7 @@ class Game:
                 pygame.draw.rect(self.screen, CELL_BG, rect, border_radius=8)
                 pygame.draw.rect(self.screen, CELL_BORDER, rect, width=2, border_radius=8)
 
+        # 箭头
         for r in range(ROWS):
             for c in range(COLS):
                 direction = self.grid[r][c]
@@ -583,6 +667,7 @@ class Game:
         for arrow in self.flying_arrows: arrow.draw(self.screen)
         for arrow in self.bumping_arrows: arrow.draw(self.screen)
 
+        # HUD
         if self.mistakes == 0: mistake_color = NEON_GREEN
         elif self.mistakes == 1: mistake_color = NEON_YELLOW
         elif self.mistakes == 2: mistake_color = NEON_ORANGE
@@ -623,22 +708,27 @@ class Game:
                     pygame.quit(); sys.exit()
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_SPACE and self.state == "START":
-                        self.elapsed_time = 0.0
-                        self.state = "PLAYING"
+                        self.total_stars = 0
+                        self.score = 0
+                        self.load_level(0)
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     pos = pygame.mouse.get_pos()
                     if self.state == "START":
                         if self.start_btn_rect.collidepoint(pos):
-                            self.elapsed_time = 0.0
-                            self.state = "PLAYING"
+                            self.total_stars = 0
+                            self.score = 0
+                            self.load_level(0)
                     elif self.state == "PLAYING":
                         restart_rect = pygame.Rect(WIDTH - 140, 15, 120, 60)
-                        if restart_rect.collidepoint(pos): self.reset_level()
-                        else: self.handle_click(pos)
+                        if restart_rect.collidepoint(pos):
+                            self.reset_level()
+                        else:
+                            self.handle_click(pos)
                     elif self.state == "WIN":
                         if self.level_index + 1 < len(LEVELS):
                             self.load_level(self.level_index + 1)
                         else:
+                            # 全部通关
                             self.score = 0
                             self.state = "START"
                     elif self.state == "LOSE":
