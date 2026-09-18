@@ -22,6 +22,7 @@ CELL_BG = (22, 26, 40)
 CELL_BORDER = (45, 55, 75)
 SHADOW_COLOR = (4, 5, 10)
 STAR_EMPTY = (60, 70, 90)
+DISABLED_COLOR = (80, 90, 110)
 
 # 霓虹色
 NEON_BLUE = (0, 200, 255)
@@ -83,7 +84,7 @@ LEVELS = [
     ]
 ]
 
-# ---------- 画箭头函数（箭身 + 箭头） ----------
+# ---------- 画箭头函数 ----------
 def draw_arrow(surface, x, y, direction, color=NEON_BLUE, outline_color=WHITE, scale=1.0):
     length = int(26 * scale)
     if length <= 3:
@@ -270,15 +271,22 @@ class Game:
         self.flying_arrows = []
         self.bumping_arrows = []
 
+        # 撤销系统：每关只能用一次
+        self.undo_available = True
+        self.undo_state = None   # (grid 副本, 分数)
+        self.undo_toast_timer = 0  # 使用后顶部提示倒计时
+
         # 星级系统
-        self.last_stars = 0        # 上一局获得的星级
-        self.total_stars = 0       # 累计星级
-        self.result_time = 0       # 进入结算界面的时间（用于星星弹出动画）
+        self.last_stars = 0
+        self.total_stars = 0
+        self.result_time = 0
 
         self.time = 0
         self.particles = [Particle() for _ in range(40)]
 
         self.start_btn_rect = pygame.Rect(WIDTH // 2 - 110, HEIGHT // 2 + 20, 220, 65)
+        # 撤销按钮矩形（供点击检测与绘制共用）
+        self.undo_btn_rect = pygame.Rect(WIDTH - 235, 12, 100, 66)
 
         self.load_level(0)
         self.state = "START"
@@ -290,6 +298,10 @@ class Game:
         self.elapsed_time = 0.0
         self.flying_arrows = []
         self.bumping_arrows = []
+        # 重置撤销
+        self.undo_available = True
+        self.undo_state = None
+        self.undo_toast_timer = 0
         self.state = "PLAYING"
 
     def reset_level(self):
@@ -338,6 +350,11 @@ class Game:
             direction = self.grid[row][col]
             if direction:
                 if any(a.row == row and a.col == col for a in self.bumping_arrows): return
+
+                # ★ 关键修改：无论成功还是失误，操作前都保存快照（含失误次数）
+                if self.undo_available:
+                    self.undo_state = ([r[:] for r in self.grid], self.score, self.mistakes)
+
                 if self.is_path_clear(row, col, direction):
                     self.grid[row][col] = None
                     self.flying_arrows.append(FlyingArrow(row, col, direction))
@@ -345,7 +362,6 @@ class Game:
                     if self.count_arrows() == 0:
                         self.state = "WIN"
                         self.score += 50
-                        # 星级评定
                         if self.mistakes == 0:
                             self.last_stars = 3
                         elif self.mistakes == 1:
@@ -363,11 +379,29 @@ class Game:
                         self.state = "LOSE"
                         self.last_stars = 0
                         self.result_time = self.time
-
+                        
+    def perform_undo(self):
+        """执行撤销：恢复上一次操作之前的状态（网格、得分、失误次数）"""
+        if not self.undo_available or self.undo_state is None:
+            return
+        grid_snapshot, score_snapshot, mistakes_snapshot = self.undo_state
+        self.grid = [r[:] for r in grid_snapshot]
+        self.score = score_snapshot
+        self.mistakes = mistakes_snapshot      # ★ 新增：恢复失误次数
+        self.undo_available = False
+        self.undo_state = None
+        # 清除动画，避免重影
+        self.flying_arrows = []
+        self.bumping_arrows = []
+        # 弹出顶部提示
+        self.undo_toast_timer = 60
+        
     def update(self):
         self.time += 1
         if self.state == "PLAYING":
             self.elapsed_time += 1.0 / 60.0
+        if self.undo_toast_timer > 0:
+            self.undo_toast_timer -= 1
         for p in self.particles:
             p.update()
         for arrow in self.flying_arrows[:]:
@@ -377,7 +411,6 @@ class Game:
             arrow.update()
             if arrow.finished: self.bumping_arrows.remove(arrow)
 
-    # ---------- 画星星函数 ----------
     def draw_star(self, cx, cy, radius, color, filled):
         if radius <= 0:
             return
@@ -411,7 +444,6 @@ class Game:
                 rect = pygame.Rect(MARGIN_X + c * CELL_SIZE, MARGIN_Y + r * CELL_SIZE, CELL_SIZE, CELL_SIZE)
                 pygame.draw.rect(self.screen, GRID_COLOR, rect, 1)
 
-        # 标题（呼吸）
         title_scale = 1.0 + 0.02 * math.sin(self.time * 0.05)
         title_text = "一箭又一箭"
         title_base = self.title_font.render(title_text, True, TITLE_COLOR)
@@ -428,7 +460,6 @@ class Game:
         sub_title = self.font.render("点击箭头，让它飞出棋盘", True, SUB_TITLE_COLOR)
         self.screen.blit(sub_title, (WIDTH // 2 - sub_title.get_width() // 2, HEIGHT // 4 + 40))
 
-        # 开始按钮
         mouse_pos = pygame.mouse.get_pos()
         hover = self.start_btn_rect.collidepoint(mouse_pos)
         btn_color = BTN_HOVER if hover else BTN_COLOR
@@ -439,22 +470,21 @@ class Game:
         self.screen.blit(btn_text, (self.start_btn_rect.centerx - btn_text.get_width() // 2,
                                      self.start_btn_rect.centery - btn_text.get_height() // 2))
 
-        # 累计星级显示
         if self.total_stars > 0:
             star_y = self.start_btn_rect.bottom + 18
             label = self.font.render(f"累计星级: {self.total_stars}", True, GOLD)
             self.screen.blit(label, (WIDTH // 2 - label.get_width() // 2, star_y))
 
-        # 操作说明
         help_lines = [
             "规则：点击箭头，若前方无阻挡则飞出并消失。",
             "若前方有阻挡，箭头会碰撞弹回，失误次数 +1。",
             "失误 3 次游戏失败，消除所有箭头则通关。",
-            "3星 = 0 失误通关，2星 = 1 失误，1星 = 2 失误。"
+            "3星 = 0 失误通关，2星 = 1 失误，1星 = 2 失误。",
+            "每关可撤销 1 次，用于恢复上一步消除操作。"
         ]
         for i, line in enumerate(help_lines):
             help_surf = self.font.render(line, True, HELP_TEXT)
-            self.screen.blit(help_surf, (WIDTH // 2 - help_surf.get_width() // 2, HEIGHT - 160 + i * 30))
+            self.screen.blit(help_surf, (WIDTH // 2 - help_surf.get_width() // 2, HEIGHT - 190 + i * 30))
 
     def draw_hud_card(self, x, y, w, h, label, value, accent_color):
         shadow_rect = pygame.Rect(x + 2, y + 2, w, h)
@@ -481,7 +511,6 @@ class Game:
 
         accent = NEON_GREEN if is_win else NEON_RED
 
-        # 外发光
         pulse = 1.0 + 0.08 * math.sin(self.time * 0.06)
         glow = pygame.Surface((panel_w + 80, panel_h + 80), pygame.SRCALPHA)
         for i in range(5, 0, -1):
@@ -491,7 +520,6 @@ class Game:
                              border_radius=20 + i * 2)
         self.screen.blit(glow, (panel_x - 40, panel_y - 40))
 
-        # 阴影
         shadow = pygame.Surface((panel_w + 20, panel_h + 20), pygame.SRCALPHA)
         pygame.draw.rect(shadow, (0, 0, 0, 160), (0, 0, panel_w + 20, panel_h + 20), border_radius=22)
         self.screen.blit(shadow, (panel_x - 10, panel_y - 10))
@@ -499,7 +527,6 @@ class Game:
         panel_rect = pygame.Rect(panel_x, panel_y, panel_w, panel_h)
         pygame.draw.rect(self.screen, (22, 28, 45), panel_rect, border_radius=18)
 
-        # 内网格
         inner_clip = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
         for i in range(0, panel_w, 24):
             pygame.draw.line(inner_clip, (40, 50, 75, 50), (i, 0), (i, panel_h))
@@ -507,7 +534,6 @@ class Game:
             pygame.draw.line(inner_clip, (40, 50, 75, 50), (0, j), (panel_w, j))
         self.screen.blit(inner_clip, (panel_x, panel_y))
 
-        # 顶部光晕
         top_glow = pygame.Surface((panel_w, 200), pygame.SRCALPHA)
         for i in range(200, 0, -10):
             alpha = max(0, int(30 * (i / 200) * pulse))
@@ -518,7 +544,6 @@ class Game:
         inner_rect = pygame.Rect(panel_x + 6, panel_y + 6, panel_w - 12, panel_h - 12)
         pygame.draw.rect(self.screen, accent, inner_rect, width=1, border_radius=14)
 
-        # 四角
         corner_len = 18
         corner_thickness = 3
         corners = [
@@ -536,7 +561,6 @@ class Game:
         pygame.draw.rect(self.screen, accent, (panel_x, panel_y, panel_w, 4),
                          border_top_left_radius=18, border_top_right_radius=18)
 
-        # 圆形图标
         icon_cy = panel_y + 70
         icon_r = 36
         ring_r = int(icon_r + 10 + 5 * pulse)
@@ -559,12 +583,10 @@ class Game:
         self.screen.blit(icon_surf, (WIDTH // 2 - icon_surf.get_width() // 2,
                                       icon_cy - icon_surf.get_height() // 2))
 
-        # 标题
         title_text = "通 关" if is_win else "失 败"
         title = self.big_font.render(title_text, True, TITLE_COLOR)
         self.screen.blit(title, (WIDTH // 2 - title.get_width() // 2, panel_y + 122))
 
-        # 分隔线
         line_y = panel_y + 180
         line_w = 260
         line_x = WIDTH // 2 - line_w // 2
@@ -574,7 +596,6 @@ class Game:
             pygame.draw.line(line_surf, (*accent, alpha), (i, 0), (i, 2))
         self.screen.blit(line_surf, (line_x, line_y))
 
-        # ---------- 星级展示 ----------
         star_cy = panel_y + 225
         star_radius = 22
         star_spacing = 65
@@ -582,19 +603,16 @@ class Game:
 
         for i in range(3):
             cx = WIDTH // 2 + (i - 1) * star_spacing
-            # 空星始终可见
             self.draw_star(cx, star_cy, star_radius, STAR_EMPTY, False)
-            # 已获得的星带弹出动画
             if i < stars_earned:
                 progress = (self.time - self.result_time - i * 18) / 18.0
                 progress = max(0.0, min(1.0, progress))
                 if progress > 0:
-                    scale = 1 - (1 - progress) ** 2  # ease-out
+                    scale = 1 - (1 - progress) ** 2
                     r = int(star_radius * scale)
                     if r > 0:
                         self.draw_star(cx, star_cy, r, GOLD, True)
 
-        # 星级文字
         if is_win:
             star_text = f"获得 {stars_earned} 星评价"
             star_color = GOLD
@@ -604,7 +622,6 @@ class Game:
         star_label = self.label_font.render(star_text, True, star_color)
         self.screen.blit(star_label, (WIDTH // 2 - star_label.get_width() // 2, panel_y + 258))
 
-        # 得分
         score_label = self.label_font.render("本 局 得 分", True, SUB_TITLE_COLOR)
         self.screen.blit(score_label, (WIDTH // 2 - score_label.get_width() // 2, panel_y + 288))
 
@@ -613,7 +630,6 @@ class Game:
         score_surf = big_score_font.render(str(self.score), True, NEON_YELLOW)
         self.screen.blit(score_surf, (WIDTH // 2 - score_surf.get_width() // 2, panel_y + 305))
 
-        # 用时
         time_label = self.label_font.render("本 局 用 时", True, SUB_TITLE_COLOR)
         self.screen.blit(time_label, (WIDTH // 2 - time_label.get_width() // 2, panel_y + 360))
 
@@ -622,7 +638,6 @@ class Game:
         time_surf = big_time_font.render(format_time(self.elapsed_time), True, NEON_CYAN)
         self.screen.blit(time_surf, (WIDTH // 2 - time_surf.get_width() // 2, panel_y + 378))
 
-        # 底部提示
         hint_text = "点击屏幕，进入下一关" if is_win else "点击屏幕，重新挑战"
         hint_pulse = 0.5 + 0.5 * math.sin(self.time * 0.1)
         hint_color = (
@@ -673,9 +688,9 @@ class Game:
         elif self.mistakes == 2: mistake_color = NEON_ORANGE
         else: mistake_color = NEON_RED
 
-        card_w, card_h = 116, 66
-        gap = 10
-        start_x = 20
+        card_w, card_h = 100, 66
+        gap = 8
+        start_x = 15
         y = 12
 
         self.draw_hud_card(start_x, y, card_w, card_h, "关卡", str(self.level_index + 1), NEON_BLUE)
@@ -684,13 +699,36 @@ class Game:
         self.draw_hud_card(start_x + (card_w + gap) * 3, y, card_w, card_h, "得分", str(self.score), NEON_YELLOW)
         self.draw_hud_card(start_x + (card_w + gap) * 4, y, card_w, card_h, "用时", format_time(self.elapsed_time), NEON_CYAN)
 
-        restart_rect = pygame.Rect(WIDTH - 140, 15, 120, 60)
+        # 撤销按钮
+        can_undo = self.undo_available and self.undo_state is not None
+        undo_color = NEON_PURPLE if can_undo else DISABLED_COLOR
+        undo_value = "1" if can_undo else "0"
+        self.draw_hud_card(self.undo_btn_rect.x, self.undo_btn_rect.y,
+                           self.undo_btn_rect.w, self.undo_btn_rect.h,
+                           "撤销", undo_value, undo_color)
+
+        # 重新开始按钮
+        restart_rect = pygame.Rect(WIDTH - 125, 12, 110, 66)
         pygame.draw.rect(self.screen, BTN_COLOR, restart_rect, border_radius=10)
         pygame.draw.rect(self.screen, BTN_BORDER, restart_rect, width=2, border_radius=10)
         restart_text = self.font.render("重新开始", True, WHITE)
         self.screen.blit(restart_text, (restart_rect.centerx - restart_text.get_width() // 2,
                                         restart_rect.centery - restart_text.get_height() // 2))
 
+        # 撤销成功提示
+        if self.undo_toast_timer > 0:
+            alpha = min(255, self.undo_toast_timer * 8)
+            toast_font = pygame.font.SysFont("simhei", 28)
+            toast_font.set_bold(True)
+            toast_surf = toast_font.render("已 撤 销", True, NEON_PURPLE)
+            toast_bg = pygame.Surface((toast_surf.get_width() + 40, toast_surf.get_height() + 20), pygame.SRCALPHA)
+            pygame.draw.rect(toast_bg, (22, 28, 45, alpha), (0, 0, toast_bg.get_width(), toast_bg.get_height()), border_radius=10)
+            pygame.draw.rect(toast_bg, (*NEON_PURPLE, alpha), (0, 0, toast_bg.get_width(), toast_bg.get_height()), width=2, border_radius=10)
+            self.screen.blit(toast_bg, (WIDTH // 2 - toast_bg.get_width() // 2, 100))
+            toast_surf.set_alpha(alpha)
+            self.screen.blit(toast_surf, (WIDTH // 2 - toast_surf.get_width() // 2, 110))
+
+        # 结算面板
         if self.state == "WIN":
             self.draw_result_panel(is_win=True)
         elif self.state == "LOSE":
@@ -711,6 +749,9 @@ class Game:
                         self.total_stars = 0
                         self.score = 0
                         self.load_level(0)
+                    # 快捷键 Z 也能撤销
+                    if event.key == pygame.K_z and self.state == "PLAYING":
+                        self.perform_undo()
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     pos = pygame.mouse.get_pos()
                     if self.state == "START":
@@ -719,16 +760,17 @@ class Game:
                             self.score = 0
                             self.load_level(0)
                     elif self.state == "PLAYING":
-                        restart_rect = pygame.Rect(WIDTH - 140, 15, 120, 60)
+                        restart_rect = pygame.Rect(WIDTH - 125, 12, 110, 66)
                         if restart_rect.collidepoint(pos):
                             self.reset_level()
+                        elif self.undo_btn_rect.collidepoint(pos):
+                            self.perform_undo()
                         else:
                             self.handle_click(pos)
                     elif self.state == "WIN":
                         if self.level_index + 1 < len(LEVELS):
                             self.load_level(self.level_index + 1)
                         else:
-                            # 全部通关
                             self.score = 0
                             self.state = "START"
                     elif self.state == "LOSE":
