@@ -1,3 +1,7 @@
 .venv/
 __pycache__/
 *.pyc
+# PyInstaller 打包产生的临时文件和输出目录
+build/
+dist/
+*.spec
